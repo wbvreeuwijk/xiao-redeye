@@ -6,7 +6,7 @@ const int STATE_ECC = 2;
 const int STATE_DATA = 4;
 const int STATE_STOP = 5;
 
-const int txPin = 3;
+const int txPin = 1;
 const int rxPin = 2;
 const int ledPin = 13;
 const int cycleTime = 427;

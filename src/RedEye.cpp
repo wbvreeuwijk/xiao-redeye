@@ -12,8 +12,10 @@ volatile int startBit = 0;
 volatile int eccHalfBit = 0;
 volatile int dataHalfBit = 0;
 volatile byte eccByte = 0;
+volatile byte eccMissingBits = 0;
 volatile byte dataByte = 0;
-volatile int missingBits = 12;
+volatile byte dataMissingBits = 0;
+volatile boolean prevPulseDetected = false;
 
 /*
     Calculate the checksum for the received bytes
@@ -76,17 +78,15 @@ void pulseProcess()
     {
         // Count the start halfbits
         if (pulseDetected)
-        {
             startBit++;
-        }
 
         // After three start halfbits we start on the ECC code
         if (startBit >= 3)
         {
             state = STATE_ECC;
             eccByte = 0;
+            eccMissingBits = 0;
             eccHalfBit = 0;
-            missingBits = 12;
         }
     }
     else if (state == STATE_ECC)
@@ -95,16 +95,16 @@ void pulseProcess()
         // If we have a pulse in the first (even) halfbit
         // We receive a one otherwise a zero
         if (pulseDetected)
-        {
             eccByte = getHalfBit(eccByte, eccHalfBit);
-            missingBits--;
-        }
+        else if (!prevPulseDetected)
+            eccMissingBits |= 1 << int(eccHalfBit / 2);
         eccHalfBit++;
         // Go to data part of the frame after 8 halfbits
         if (eccHalfBit == 8)
         {
             state = STATE_DATA;
             dataHalfBit = 0;
+            dataMissingBits = 0;
             dataByte = 0;
         }
     }
@@ -112,27 +112,29 @@ void pulseProcess()
     {
         // Check for data halfbits
         if (pulseDetected)
-        {
             dataByte = getHalfBit(dataByte, dataHalfBit);
-            missingBits--;
-        }
+        else if (!prevPulseDetected)
+            dataMissingBits |= 1 << int(dataHalfBit / 2);
         dataHalfBit++;
+        // After 16 halfbits we have a data byte
+        // Check if the ECC matches the calculated ECC
+        // TODO: Check missing bits against ECC and correct
         if (dataHalfBit == 16)
         {
             state = STATE_IDLE;
             startBit = 0;
-            if (missingBits == 0)
+            if (eccByte == calcECC(dataByte))
             {
                 Serial.write(dataByte);
-            } else {
-                Serial.println("Missing:"+missingBits);
             }
             TimerTc3.stop();
         }
     }
-    digitalWrite(txPin, false);
+    prevPulseDetected = pulseDetected;
 }
-
+/*
+    Simply count incoming pulses and start time when first frame pulse is detected.
+*/
 void pulseCount()
 {
     pulse++;
@@ -143,6 +145,9 @@ void pulseCount()
     }
 }
 
+/*
+    Setup serial output en define timers and interrupts
+*/
 void setup()
 {
     // Setup serial output
@@ -154,7 +159,7 @@ void setup()
     // Setup Pins
     pinMode(rxPin, INPUT_PULLUP);
     pinMode(txPin, OUTPUT);
-    analogWriteResolution(8);
+    digitalWrite(txPin, HIGH);
 
     // Set pulse processing timer
     TimerTc3.initialize(cycleTime);
@@ -168,12 +173,5 @@ void setup()
 
 void loop()
 {
-    // while (true)
-    // {
-    //     if (isDataAvailable())
-    //     {
-    //         byte data = getByte();
-    //         Serial.write(data);
-    //     }
-    // }
+    // Nothing to do
 }
