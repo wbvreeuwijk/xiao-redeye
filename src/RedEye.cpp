@@ -43,6 +43,20 @@ static byte calcECC(byte data)
 }
 
 /*
+    Calculate Parity
+*/
+int parity(byte d)
+{
+    int p = 0;
+    while (d > 0)
+    {
+        p += d & 0x01;
+        d >>= 1;
+    }
+    return p % 2;
+}
+
+/*
     Process halfbit
 */
 byte getHalfBit(byte data, int halfBit)
@@ -118,15 +132,31 @@ void pulseProcess()
         dataHalfBit++;
         // After 16 halfbits we have a data byte
         // Check if the ECC matches the calculated ECC
-        // TODO: Check missing bits against ECC and correct
         if (dataHalfBit == 16)
         {
             state = STATE_IDLE;
             startBit = 0;
-            if (eccByte == calcECC(dataByte))
+            // Only check error correction when we have no missing ECC bits
+            if (eccMissingBits == 0 && dataMissingBits != 0)
             {
-                Serial.write(dataByte);
+                while (dataMissingBits != 0x00)
+                {
+                    for (byte i = 0; i < 4; i++)
+                    {
+                        byte mask = H[i];
+                        byte x = dataMissingBits & mask;
+                        if (parity(x) == 1)
+                        {
+                            if (parity(dataByte & mask) != ((eccByte >> (3 - i)) & 0x01))
+                                dataByte |= x;
+                            dataMissingBits &= ~x;
+                            break;
+                        }
+                    }
+                }
             }
+            Serial.write(dataByte);
+
             TimerTc3.stop();
         }
     }
