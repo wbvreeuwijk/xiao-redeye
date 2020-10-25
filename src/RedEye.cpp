@@ -12,9 +12,9 @@ volatile int startBit = 0;
 volatile int eccHalfBit = 0;
 volatile int dataHalfBit = 0;
 volatile byte eccByte = 0;
-volatile byte eccMissingBits = 0;
+volatile int_fast16_t eccPulses = 0;
 volatile byte dataByte = 0;
-volatile byte dataMissingBits = 0;
+volatile int_fast16_t dataPulses = 0;
 volatile boolean prevPulseDetected = false;
 
 /*
@@ -56,6 +56,19 @@ int parity(byte d)
     return p % 2;
 }
 
+/* 
+    Calculate missing bits
+*/
+byte getMissing(int_fast16_t b)
+{
+    byte m = 0;
+    while (b > 0)
+    {
+        m = (m << 1) | !((b & 1) ^ ((b >> 1) & 1));
+        b = b >> 2;
+    }
+    return m;
+}
 /*
     Process halfbit
 */
@@ -84,8 +97,8 @@ void pulseProcess()
 
     // Did we get a pulse in this halbit
     boolean pulseDetected = pulse >= 6;
-    if (pulseDetected)
-        pulse = 0;
+    //if (pulseDetected)
+    pulse = 0;
 
     // Start halfbit processing
     if (state == STATE_START)
@@ -99,7 +112,7 @@ void pulseProcess()
         {
             state = STATE_ECC;
             eccByte = 0;
-            eccMissingBits = 0;
+            eccPulses = 0;
             eccHalfBit = 0;
         }
     }
@@ -110,15 +123,14 @@ void pulseProcess()
         // We receive a one otherwise a zero
         if (pulseDetected)
             eccByte = getHalfBit(eccByte, eccHalfBit);
-        else if (!prevPulseDetected)
-            eccMissingBits |= 1 << int(eccHalfBit / 2);
+        eccPulses |= ((pulseDetected) ? 1 : 0) << eccHalfBit;
         eccHalfBit++;
         // Go to data part of the frame after 8 halfbits
         if (eccHalfBit == 8)
         {
             state = STATE_DATA;
             dataHalfBit = 0;
-            dataMissingBits = 0;
+            dataPulses = 0;
             dataByte = 0;
         }
     }
@@ -127,8 +139,7 @@ void pulseProcess()
         // Check for data halfbits
         if (pulseDetected)
             dataByte = getHalfBit(dataByte, dataHalfBit);
-        else if (!prevPulseDetected)
-            dataMissingBits |= 1 << int(dataHalfBit / 2);
+        dataPulses |= ((pulseDetected) ? 1 : 0) << dataHalfBit;
         dataHalfBit++;
         // After 16 halfbits we have a data byte
         // Check if the ECC matches the calculated ECC
@@ -136,26 +147,53 @@ void pulseProcess()
         {
             state = STATE_IDLE;
             startBit = 0;
+            byte missingECCBits = getMissing(eccPulses);
+            byte missingDataBits = getMissing(dataHalfBit);
             // Only check error correction when we have no missing ECC bits
-            if (eccMissingBits == 0 && dataMissingBits != 0)
+            if (missingECCBits == 0 && missingECCBits == 0)
+            { // Complete error free frame
+                Serial.write(dataByte);
+#ifdef DEBUG
+                Serial.println();
+#endif
+            }
+            else if (missingECCBits != 0)
+            { // Error in ECC
+#ifdef DEBUG
+                Serial.print(missingECCBits, BIN);
+                Serial.write(":");
+                Serial.write(dataByte);
+                Serial.println();
+#else
+                Serial.write(dataByte);
+#endif
+            }
+            else if (missingDataBits != 0)
             {
-                while (dataMissingBits != 0x00)
+                while (missingDataBits != 0x00)
                 {
                     for (byte i = 0; i < 4; i++)
                     {
                         byte mask = H[i];
-                        byte x = dataMissingBits & mask;
+                        byte x = missingDataBits & mask;
                         if (parity(x) == 1)
                         {
                             if (parity(dataByte & mask) != ((eccByte >> (3 - i)) & 0x01))
                                 dataByte |= x;
-                            dataMissingBits &= ~x;
+                            missingDataBits &= ~x;
                             break;
                         }
                     }
                 }
+#ifdef DEBUG
+                Serial.print(missingDataBits, BIN);
+                Serial.write(":");
+                Serial.write(dataByte);
+                Serial.println();
+#else
+                Serial.write(dataByte);
+#endif
             }
-            Serial.write(dataByte);
 
             TimerTc3.stop();
         }
